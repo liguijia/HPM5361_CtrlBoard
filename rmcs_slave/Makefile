@@ -2,8 +2,7 @@
 BUILD_DIR := build
 
 # 默认的 CMake 配置指令（配置阶段）
-# 注意：这里我们使用默认值，因为它们已经在 CMakeLists.txt 中定义了
-CMAKE_CONFIG := cmake -B $(BUILD_DIR) -GNinja
+CMAKE_CONFIG := cmake -B $(BUILD_DIR) -GNinja -DSOURCE_PREFIX_MAP_PATH='\\wsl.localhost\archlinux\home\kaiser\Codes\HPM_Develop\HPM5361_CtrlBoard\rmcs_slave' .  
 
 # 默认的构建指令 (编译阶段)
 CMAKE_BUILD := cmake --build $(BUILD_DIR)
