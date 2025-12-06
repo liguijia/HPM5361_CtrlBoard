@@ -7,11 +7,15 @@
 #include "board.h"
 #include "hpm_clock_drv.h"
 #include "hpm_gpio_drv.h"
+#include "hpm_i2c_drv.h"
 #include "hpm_pcfg_drv.h"
 #include "hpm_pllctlv2_drv.h"
+#include "hpm_pwm_drv.h"
 #include "hpm_sdk_version.h"
+#include "hpm_soc.h"
 #include "hpm_uart_drv.h"
-
+#include "hpm_usb_drv.h"
+#include "pinmux.h"
 /**
  * @brief FLASH configuration option definitions:
  * option[0]:
@@ -132,13 +136,17 @@ void board_print_clock_freq(void) {
 
 void board_init(void) {
   init_py_pins_as_pgpio();
-
+  //
   board_init_clock();
+  //
+  board_init_gpio_pins();
+  board_init_led_pins();
+  //
+  board_init_usb_dp_dm_pins();
+  //
   board_init_console();
   board_print_clock_freq();
   board_print_banner();
-  board_init_gpio_pins();
-  board_init_led_pins();
 }
 
 void board_init_clock(void) {
@@ -171,7 +179,7 @@ void board_init_clock(void) {
   pcfg_dcdc_set_voltage(HPM_PCFG, 1275);
 
   /* Configure CPU to 720MHz, AXI/AHB to 360MHz */
-  sysctl_config_cpu0_domain_clock(HPM_SYSCTL, clock_source_pll0_clk0, 1, 2);
+  sysctl_config_cpu0_domain_clock(HPM_SYSCTL, clock_source_pll0_clk0, 2, 2);
   /* Configure PLL0 Post Divider */
   pllctlv2_set_postdiv(HPM_PLLCTLV2, pllctlv2_pll0, pllctlv2_clk0,
                        pllctlv2_div_1p0); /* PLL0CLK0: 960MHz */
@@ -188,10 +196,239 @@ void board_init_clock(void) {
   clock_set_source_divider(clock_mchtmr0, clk_src_osc24m, 1);
 }
 
+// board usb initialization
+/**
+ * @brief board_init_usb_dp_dm_pins
+ *
+ */
+void board_init_usb_dp_dm_pins(void) {
+  /* Disconnect usb dp/dm pins pull down 45ohm resistance */
+
+  while (sysctl_resource_any_is_busy(HPM_SYSCTL)) {
+  }
+
+  if (pllctlv2_xtal_is_stable(HPM_PLLCTLV2) &&
+      pllctlv2_xtal_is_enabled(HPM_PLLCTLV2)) {
+    if (clock_check_in_group(clock_usb0, 0)) {
+      usb_phy_disable_dp_dm_pulldown(HPM_USB0);
+    } else {
+      clock_add_to_group(clock_usb0, 0);
+      usb_phy_disable_dp_dm_pulldown(HPM_USB0);
+      clock_remove_from_group(clock_usb0, 0);
+    }
+  } else {
+    uint8_t tmp;
+    tmp = sysctl_resource_target_get_mode(HPM_SYSCTL, sysctl_resource_xtal);
+    sysctl_resource_target_set_mode(HPM_SYSCTL, sysctl_resource_xtal, 0x03);
+    clock_add_to_group(clock_usb0, 0);
+    usb_phy_disable_dp_dm_pulldown(HPM_USB0);
+    clock_remove_from_group(clock_usb0, 0);
+    while (sysctl_resource_target_is_busy(HPM_SYSCTL, sysctl_resource_usb0)) {
+    }
+    sysctl_resource_target_set_mode(HPM_SYSCTL, sysctl_resource_xtal, tmp);
+  }
+}
+/**
+ * @brief board_init_usb
+ *
+ * @param ptr USB_Type*
+ */
+void board_init_usb(USB_Type *ptr) {
+  if (ptr == HPM_USB0) {
+    // no USB_ID & USB_OC & USB_VBUS pinout in this board
+    // init_usb_pins(ptr);
+    clock_add_to_group(clock_usb0, 0);
+
+    usb_hcd_set_power_ctrl_polarity(ptr, true);
+    board_delay_ms(100);
+
+    usb_phy_using_internal_vbus(ptr);
+  }
+}
+// board can initialization
+
+uint32_t board_init_can_clock(MCAN_Type *ptr) {
+  uint32_t freq = 0;
+  if (ptr == HPM_MCAN0) {
+    clock_add_to_group(clock_can0, 0);
+    clock_set_source_divider(clock_can0, clk_src_pll1_clk0, 10);
+    freq = clock_get_frequency(clock_can0);
+  } else if (ptr == HPM_MCAN1) {
+    clock_add_to_group(clock_can1, 0);
+    clock_set_source_divider(clock_can1, clk_src_pll1_clk0, 10);
+    freq = clock_get_frequency(clock_can1);
+  } else if (ptr == HPM_MCAN2) {
+    clock_add_to_group(clock_can2, 0);
+    clock_set_source_divider(clock_can2, clk_src_pll1_clk0, 10);
+    freq = clock_get_frequency(clock_can2);
+  } else if (ptr == HPM_MCAN3) {
+    clock_add_to_group(clock_can3, 0);
+    clock_set_source_divider(clock_can3, clk_src_pll1_clk0, 10);
+    freq = clock_get_frequency(clock_can3);
+  }
+  return freq;
+}
+void board_init_can(MCAN_Type *ptr) {
+  init_can_pins(ptr);
+  board_init_can_clock(ptr);
+}
+// board uart initialization
+/**
+ * @brief board_init_uart_clock
+ *
+ * @param ptr UART_Type*
+ * @return uint32_t uart clock frequency
+ */
+uint32_t board_init_uart_clock(UART_Type *ptr) {
+  uint32_t freq = 0U;
+  if (ptr == HPM_UART0) {
+    clock_add_to_group(clock_uart0, 0);
+    freq = clock_get_frequency(clock_uart0);
+  } else if (ptr == HPM_UART1) {
+    clock_add_to_group(clock_uart1, 0);
+    freq = clock_get_frequency(clock_uart1);
+  } else if (ptr == HPM_UART2) {
+    clock_add_to_group(clock_uart2, 0);
+    freq = clock_get_frequency(clock_uart2);
+  } else if (ptr == HPM_UART3) {
+    clock_add_to_group(clock_uart3, 0);
+    freq = clock_get_frequency(clock_uart3);
+  } else if (ptr == HPM_UART4) {
+    clock_add_to_group(clock_uart4, 0);
+    freq = clock_get_frequency(clock_uart4);
+  } else if (ptr == HPM_UART5) {
+    clock_add_to_group(clock_uart5, 0);
+    freq = clock_get_frequency(clock_uart5);
+  }
+  return freq;
+}
+/**
+ * @brief board_init_uart
+ *
+ * @param ptr UART_Type*
+ */
+void board_init_uart(UART_Type *ptr) {
+  init_uart_pins(ptr);
+  board_init_uart_clock(ptr);
+}
+
+// board spi initialization
+/**
+ * @brief board_init_spi_clock
+ * @param ptr SPI_Type*
+ * @return uint32_t spi clock frequency
+ */
+uint32_t board_init_spi_clock(SPI_Type *ptr) {
+  if (ptr == HPM_SPI1) {
+    clock_add_to_group(clock_spi1, 0);
+    return clock_get_frequency(clock_spi1);
+  } else if (ptr == HPM_SPI2) {
+    clock_add_to_group(clock_spi2, 0);
+    return clock_get_frequency(clock_spi2);
+  } else if (ptr == HPM_SPI3) {
+    clock_add_to_group(clock_spi3, 0);
+    return clock_get_frequency(clock_spi3);
+  }
+  return 0;
+}
+/**
+ * @brief board_init_spi_pins
+ * @param ptr SPI_Type*
+ */
+void board_init_spi_pins(SPI_Type *ptr) {
+  init_spi_pins(ptr);
+  board_init_spi_clock(ptr);
+}
+
+// board i2c initialization
+/**
+ * @brief board_init_i2c_clock
+ * @param ptr I2C_Type*
+ * @return uint32_t i2c clock frequency
+ */
+uint32_t board_init_i2c_clock(I2C_Type *ptr) {
+  uint32_t freq = 0;
+  if (ptr == HPM_I2C0) {
+    clock_add_to_group(clock_i2c0, 0);
+    freq = clock_get_frequency(clock_i2c0);
+  }
+  return freq;
+}
+/**
+ * @brief board_init_i2c
+ * @param ptr I2C_Type*
+ */
+void board_i2c_bus_clear(I2C_Type *ptr) {
+  if (i2c_get_line_scl_status(ptr) == false) {
+    while (1) {
+    }
+  }
+  if (i2c_get_line_sda_status(ptr) == false) {
+  } else {
+    return;
+  }
+  i2c_gen_reset_signal(ptr, 9);
+  board_delay_ms(100);
+}
+/**
+ * @brief board_init_i2c
+ * @param ptr I2C_Type*
+ */
+void board_init_i2c(I2C_Type *ptr) {
+  i2c_config_t config;
+  hpm_stat_t stat;
+  uint32_t freq;
+
+  freq = board_init_i2c_clock(ptr);
+  init_i2c_pins(ptr);
+  board_i2c_bus_clear(ptr);
+  config.i2c_mode = i2c_mode_normal;
+  config.is_10bit_addressing = false;
+  stat = i2c_init_master(ptr, freq, &config);
+  if (stat != status_success) {
+    while (1) {
+    }
+  }
+}
+
+/*  other board functions */
+
+void board_init_rgbled(void) { init_rgbled_pwm_pins(); }
+void board_set_rgbled_color(uint8_t r, uint8_t g, uint8_t b) {
+  // TODO
+}
+
+void board_init_buzzer(void) { init_buzzer_pwm_pin(); }
+void board_set_buzzer_freq(uint32_t freq_in_hz) {
+  // TODO
+}
+
+void board_init_imuheater(void) { init_imuheater_pwm_pin(); }
+void board_set_imuheater_power(uint8_t power_percent) {
+  // TODO
+}
+
+void board_init_pinsocket_pwmout(void) { init_pinsocket_pwm_pins(); }
+void board_set_pinsocket_pwmout(uint8_t channel, uint32_t freq_in_hz,
+                                float duty_cycle_percent) {
+  // TODO
+}
+
+void board_init_user_key(void) { init_user_key_pin(); }
+bool board_get_user_key_status(void) {
+  return gpio_read_pin(HPM_GPIO0, GPIO_DI_GPIOY, 3) == 0;
+}
+
+void board_init_user_sw(void) { init_user_sw_pin(); }
+bool board_get_user_sw_status(void) {
+  return gpio_read_pin(HPM_GPIO0, GPIO_DI_GPIOY, 4) != 0;
+}
+
+// board delay functions
 void board_delay_us(uint32_t us) { clock_cpu_delay_us(us); }
 
 void board_delay_ms(uint32_t ms) { clock_cpu_delay_ms(ms); }
-
+// TODO Remove - hpm5300evk config，if not use hpm5300evk
 void board_init_gpio_pins(void) {
   init_gpio_pins();
   gpio_set_pin_input(BOARD_APP_GPIO_CTRL, BOARD_APP_GPIO_INDEX,
@@ -202,14 +439,4 @@ void board_init_led_pins(void) {
   init_led_pins_as_gpio();
   gpio_set_pin_output_with_initial(BOARD_LED_GPIO_CTRL, BOARD_LED_GPIO_INDEX,
                                    BOARD_LED_GPIO_PIN, BOARD_LED_OFF_LEVEL);
-}
-
-void board_led_write(uint8_t state) {
-  gpio_write_pin(BOARD_LED_GPIO_CTRL, BOARD_LED_GPIO_INDEX, BOARD_LED_GPIO_PIN,
-                 state);
-}
-
-void board_led_toggle(void) {
-  gpio_toggle_pin(BOARD_LED_GPIO_CTRL, BOARD_LED_GPIO_INDEX,
-                  BOARD_LED_GPIO_PIN);
 }
