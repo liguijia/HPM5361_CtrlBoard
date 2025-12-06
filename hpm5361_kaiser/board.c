@@ -13,9 +13,9 @@
 #include "hpm_pwm_drv.h"
 #include "hpm_sdk_version.h"
 #include "hpm_soc.h"
-#include "hpm_uart_drv.h"
 #include "hpm_usb_drv.h"
 #include "pinmux.h"
+#include <stdio.h>
 /**
  * @brief FLASH configuration option definitions:
  * option[0]:
@@ -179,7 +179,7 @@ void board_init_clock(void) {
   pcfg_dcdc_set_voltage(HPM_PCFG, 1275);
 
   /* Configure CPU to 720MHz, AXI/AHB to 360MHz */
-  sysctl_config_cpu0_domain_clock(HPM_SYSCTL, clock_source_pll0_clk0, 2, 2);
+  sysctl_config_cpu0_domain_clock(HPM_SYSCTL, clock_source_pll0_clk0, 1, 2);
   /* Configure PLL0 Post Divider */
   pllctlv2_set_postdiv(HPM_PLLCTLV2, pllctlv2_pll0, pllctlv2_clk0,
                        pllctlv2_div_1p0); /* PLL0CLK0: 960MHz */
@@ -187,7 +187,7 @@ void board_init_clock(void) {
                        pllctlv2_div_1p6); /* PLL0CLK1: 600MHz */
   pllctlv2_set_postdiv(HPM_PLLCTLV2, pllctlv2_pll0, pllctlv2_clk2,
                        pllctlv2_div_2p4); /* PLL0CLK2: 400MHz */
-  /* Configure PLL0 Frequency to 960MHz */
+  /* Configure PLL0 Frequency to 720MHz */
   pllctlv2_init_pll_with_freq(HPM_PLLCTLV2, pllctlv2_pll0, 720000000);
 
   clock_update_core_clock();
@@ -393,9 +393,59 @@ void board_init_i2c(I2C_Type *ptr) {
 
 /*  other board functions */
 
-void board_init_rgbled(void) { init_rgbled_pwm_pins(); }
-void board_set_rgbled_color(uint8_t r, uint8_t g, uint8_t b) {
-  // TODO
+// board RGB LED
+static bool rgb_pwm_inited = false;
+static uint32_t rgb_reload;
+void board_init_rgbled(void) {
+  pwm_config_t pwm_cfg;
+  pwm_cmp_config_t cmp_cfg = {0};
+  // init pwm pins
+  init_rgbled_pwm_pins();
+  // Deinitialize PWM0 before configuration
+  pwm_deinit(HPM_PWM0);
+  pwm_stop_counter(HPM_PWM0);
+  //
+  // configure pwm
+  uint32_t freq = clock_get_frequency(clock_mot0);
+  rgb_reload = freq / 36000 - 1U;
+  // configure pwm
+  pwm_get_default_pwm_config(HPM_PWM0, &pwm_cfg);
+  pwm_cfg.enable_output = true;
+  pwm_cfg.invert_output = false;
+  pwm_cfg.dead_zone_in_half_cycle = 0;
+  //
+  pwm_stop_counter(HPM_PWM0);
+  pwm_set_reload(HPM_PWM0, 0, rgb_reload);
+  pwm_set_start_count(HPM_PWM0, 0, 0);
+  pwm_issue_shadow_register_lock_event(HPM_PWM0);
+  pwm_start_counter(HPM_PWM0);
+  //
+  pwm_get_default_cmp_config(HPM_PWM0, &cmp_cfg);
+  cmp_cfg.mode = pwm_cmp_mode_output_compare;
+  cmp_cfg.cmp = 0; // 初始占空比 0%
+  cmp_cfg.update_trigger = pwm_shadow_register_update_on_modify;
+
+  pwm_setup_waveform(HPM_PWM0, 4, &pwm_cfg, 4, &cmp_cfg, 1);
+  pwm_setup_waveform(HPM_PWM0, 5, &pwm_cfg, 5, &cmp_cfg, 1);
+  pwm_setup_waveform(HPM_PWM0, 6, &pwm_cfg, 6, &cmp_cfg, 1);
+
+  pwm_start_counter(HPM_PWM0);
+
+  pwm_enable_output(HPM_PWM0, 4);
+  pwm_enable_output(HPM_PWM0, 5);
+  pwm_enable_output(HPM_PWM0, 6);
+
+  rgb_pwm_inited = true;
+  printf("rld_reg = %lu\r\n", pwm_get_reload_val(HPM_PWM0));
+}
+void board_set_rgbled_color(float r, float g, float b) {
+  if (!rgb_pwm_inited) {
+    board_init_rgbled();
+  }
+
+  pwm_update_duty_edge_aligned(HPM_PWM0, 6, r);
+  pwm_update_duty_edge_aligned(HPM_PWM0, 5, g);
+  pwm_update_duty_edge_aligned(HPM_PWM0, 4, b);
 }
 
 void board_init_buzzer(void) { init_buzzer_pwm_pin(); }

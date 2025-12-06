@@ -35,6 +35,7 @@
 #endif
 #endif
 
+// TODO Remove - hpm5300evk config，if not use hpm5300evk
 /* User LED / Button */
 #define BOARD_LED_GPIO_CTRL HPM_GPIO0
 #define BOARD_LED_GPIO_INDEX GPIO_DI_GPIOA
@@ -72,7 +73,7 @@ uint32_t board_init_i2c_clock(I2C_Type *ptr);
 void board_i2c_bus_clear(I2C_Type *ptr);
 
 void board_init_rgbled(void);
-void board_set_rgbled_color(uint8_t r, uint8_t g, uint8_t b);
+void board_set_rgbled_color(float r, float g, float b);
 
 void board_init_buzzer(void);
 void board_set_buzzer_freq(uint32_t freq_in_hz);
