@@ -76,7 +76,7 @@ void board_init_rgbled(void);
 void board_set_rgbled_color(float r, float g, float b);
 
 void board_init_buzzer(void);
-void board_set_buzzer_freq(uint32_t freq_in_hz);
+void board_set_buzzer_freq(bool enable, uint32_t freq_in_hz);
 
 void board_init_imuheater(void);
 void board_set_imuheater_power(uint8_t power_percent);

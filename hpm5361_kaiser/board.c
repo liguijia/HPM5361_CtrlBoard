@@ -396,6 +396,9 @@ void board_init_i2c(I2C_Type *ptr) {
 // board RGB LED
 static bool rgb_pwm_inited = false;
 static uint32_t rgb_reload;
+static float rgb_last_r;
+static float rgb_last_g;
+static float rgb_last_b;
 void board_init_rgbled(void) {
   pwm_config_t pwm_cfg;
   pwm_cmp_config_t cmp_cfg = {0};
@@ -407,7 +410,7 @@ void board_init_rgbled(void) {
   //
   // configure pwm
   uint32_t freq = clock_get_frequency(clock_mot0);
-  rgb_reload = freq / 36000 - 1U;
+  rgb_reload = freq / 10000 - 1U;
   // configure pwm
   pwm_get_default_pwm_config(HPM_PWM0, &pwm_cfg);
   pwm_cfg.enable_output = true;
@@ -422,7 +425,7 @@ void board_init_rgbled(void) {
   //
   pwm_get_default_cmp_config(HPM_PWM0, &cmp_cfg);
   cmp_cfg.mode = pwm_cmp_mode_output_compare;
-  cmp_cfg.cmp = 0; // 初始占空比 0%
+  cmp_cfg.cmp = 0; // init duty 0%
   cmp_cfg.update_trigger = pwm_shadow_register_update_on_modify;
 
   pwm_setup_waveform(HPM_PWM0, 4, &pwm_cfg, 4, &cmp_cfg, 1);
@@ -436,21 +439,93 @@ void board_init_rgbled(void) {
   pwm_enable_output(HPM_PWM0, 6);
 
   rgb_pwm_inited = true;
-  printf("rld_reg = %lu\r\n", pwm_get_reload_val(HPM_PWM0));
 }
 void board_set_rgbled_color(float r, float g, float b) {
   if (!rgb_pwm_inited) {
     board_init_rgbled();
   }
 
+  rgb_last_r = r;
+  rgb_last_g = g;
+  rgb_last_b = b;
+
   pwm_update_duty_edge_aligned(HPM_PWM0, 6, r);
   pwm_update_duty_edge_aligned(HPM_PWM0, 5, g);
   pwm_update_duty_edge_aligned(HPM_PWM0, 4, b);
 }
+//
+static bool buzzer_pwm_inited = false;
+static uint32_t buzzer_reload;
+void board_init_buzzer(void) {
+  pwm_config_t pwm_cfg;
+  pwm_cmp_config_t cmp_cfg;
+  // init pwm pins
+  init_buzzer_pwm_pin();
+  //
+  uint32_t src_clk = clock_get_frequency(clock_mot0);
+  /* Default 2 kHz, avoid division by zero */
+  uint32_t target_hz = 2000U;
+  buzzer_reload = (src_clk / target_hz) - 1U;
 
-void board_init_buzzer(void) { init_buzzer_pwm_pin(); }
-void board_set_buzzer_freq(uint32_t freq_in_hz) {
-  // TODO
+  /* Stop counting and prevent interference from old configurations */
+  pwm_stop_counter(HPM_PWM0);
+  pwm_get_default_pwm_config(HPM_PWM0, &pwm_cfg);
+  pwm_cfg.enable_output = true;
+  pwm_cfg.invert_output = false;
+  pwm_cfg.dead_zone_in_half_cycle = 0;
+
+  pwm_get_default_cmp_config(HPM_PWM0, &cmp_cfg);
+  cmp_cfg.mode = pwm_cmp_mode_output_compare;
+  cmp_cfg.update_trigger = pwm_shadow_register_update_on_modify;
+  cmp_cfg.cmp = buzzer_reload / 2; /* 50% duty */
+
+  /* Write reload & initial value */
+  pwm_set_reload(HPM_PWM0, 0, buzzer_reload);
+  pwm_set_start_count(HPM_PWM0, 0, 0);
+
+  /* Configure output channel 7 using CMP7 */
+  pwm_setup_waveform(HPM_PWM0, 7, &pwm_cfg, 7, &cmp_cfg, 1);
+
+  /* Latch shadow -> active */
+  pwm_issue_shadow_register_lock_event(HPM_PWM0);
+
+  pwm_start_counter(HPM_PWM0);
+  pwm_enable_output(HPM_PWM0, 7);
+
+  buzzer_pwm_inited = true;
+}
+void board_set_buzzer_freq(bool enable, uint32_t freq_in_hz) {
+  if (!enable || (freq_in_hz == 0)) {
+    pwm_disable_output(HPM_PWM0, 7);
+    /*
+     * PB07 shares the PWM0 counter with RGB. When the buzzer is disabled,
+     * restore PWM0 to RGB. Normal configuration to prevent the RGB breathing
+     * from becoming stiff due to frequency changes from the buzzer.
+     */
+    board_init_rgbled();
+    board_set_rgbled_color(rgb_last_r, rgb_last_g, rgb_last_b);
+    buzzer_pwm_inited = false;
+    return;
+  }
+
+  /* force configure the channels when enabling the buzzer 7 */
+  board_init_buzzer();
+
+  uint32_t src_clk = clock_get_frequency(clock_mot0);
+  buzzer_reload = (src_clk / freq_in_hz) - 1U;
+
+  pwm_stop_counter(HPM_PWM0);
+  pwm_set_reload(HPM_PWM0, 0, buzzer_reload);
+  pwm_set_start_count(HPM_PWM0, 0, 0);
+
+  /* 50% duty，new cmp = reload/2 */
+  pwm_update_raw_cmp_edge_aligned(HPM_PWM0, 7, buzzer_reload / 2);
+
+  pwm_issue_shadow_register_lock_event(HPM_PWM0);
+  pwm_start_counter(HPM_PWM0);
+  pwm_enable_output(HPM_PWM0, 7);
+  // restore rgb led state
+  board_set_rgbled_color(rgb_last_r, rgb_last_g, rgb_last_b);
 }
 
 void board_init_imuheater(void) { init_imuheater_pwm_pin(); }
