@@ -16,6 +16,7 @@
 #include "hpm_usb_drv.h"
 #include "pinmux.h"
 #include <stdio.h>
+
 /**
  * @brief FLASH configuration option definitions:
  * option[0]:
@@ -196,11 +197,8 @@ void board_init_clock(void) {
   clock_set_source_divider(clock_mchtmr0, clk_src_osc24m, 1);
 }
 
-// board usb initialization
-/**
- * @brief board_init_usb_dp_dm_pins
- *
- */
+/* ---------------- USB ---------------- */
+
 void board_init_usb_dp_dm_pins(void) {
   /* Disconnect usb dp/dm pins pull down 45ohm resistance */
 
@@ -228,11 +226,7 @@ void board_init_usb_dp_dm_pins(void) {
     sysctl_resource_target_set_mode(HPM_SYSCTL, sysctl_resource_xtal, tmp);
   }
 }
-/**
- * @brief board_init_usb
- *
- * @param ptr USB_Type*
- */
+
 void board_init_usb(USB_Type *ptr) {
   if (ptr == HPM_USB0) {
     // no USB_ID & USB_OC & USB_VBUS pinout in this board
@@ -245,7 +239,8 @@ void board_init_usb(USB_Type *ptr) {
     usb_phy_using_internal_vbus(ptr);
   }
 }
-// board can initialization
+
+/* ---------------- CAN ---------------- */
 
 uint32_t board_init_can_clock(MCAN_Type *ptr) {
   uint32_t freq = 0;
@@ -268,17 +263,14 @@ uint32_t board_init_can_clock(MCAN_Type *ptr) {
   }
   return freq;
 }
+
 void board_init_can(MCAN_Type *ptr) {
   init_can_pins(ptr);
   board_init_can_clock(ptr);
 }
-// board uart initialization
-/**
- * @brief board_init_uart_clock
- *
- * @param ptr UART_Type*
- * @return uint32_t uart clock frequency
- */
+
+/* ---------------- UART ---------------- */
+
 uint32_t board_init_uart_clock(UART_Type *ptr) {
   uint32_t freq = 0U;
   if (ptr == HPM_UART0) {
@@ -302,22 +294,14 @@ uint32_t board_init_uart_clock(UART_Type *ptr) {
   }
   return freq;
 }
-/**
- * @brief board_init_uart
- *
- * @param ptr UART_Type*
- */
+
 void board_init_uart(UART_Type *ptr) {
   init_uart_pins(ptr);
   board_init_uart_clock(ptr);
 }
 
-// board spi initialization
-/**
- * @brief board_init_spi_clock
- * @param ptr SPI_Type*
- * @return uint32_t spi clock frequency
- */
+/* ---------------- SPI ---------------- */
+
 uint32_t board_init_spi_clock(SPI_Type *ptr) {
   if (ptr == HPM_SPI1) {
     clock_add_to_group(clock_spi1, 0);
@@ -331,21 +315,14 @@ uint32_t board_init_spi_clock(SPI_Type *ptr) {
   }
   return 0;
 }
-/**
- * @brief board_init_spi_pins
- * @param ptr SPI_Type*
- */
+
 void board_init_spi_pins(SPI_Type *ptr) {
   init_spi_pins(ptr);
   board_init_spi_clock(ptr);
 }
 
-// board i2c initialization
-/**
- * @brief board_init_i2c_clock
- * @param ptr I2C_Type*
- * @return uint32_t i2c clock frequency
- */
+/* ---------------- I2C ---------------- */
+
 uint32_t board_init_i2c_clock(I2C_Type *ptr) {
   uint32_t freq = 0;
   if (ptr == HPM_I2C0) {
@@ -354,10 +331,7 @@ uint32_t board_init_i2c_clock(I2C_Type *ptr) {
   }
   return freq;
 }
-/**
- * @brief board_init_i2c
- * @param ptr I2C_Type*
- */
+
 void board_i2c_bus_clear(I2C_Type *ptr) {
   if (i2c_get_line_scl_status(ptr) == false) {
     while (1) {
@@ -370,10 +344,7 @@ void board_i2c_bus_clear(I2C_Type *ptr) {
   i2c_gen_reset_signal(ptr, 9);
   board_delay_ms(100);
 }
-/**
- * @brief board_init_i2c
- * @param ptr I2C_Type*
- */
+
 void board_init_i2c(I2C_Type *ptr) {
   i2c_config_t config;
   hpm_stat_t stat;
@@ -391,48 +362,164 @@ void board_init_i2c(I2C_Type *ptr) {
   }
 }
 
-/*  other board functions */
+/* ========================================================================== */
+/*                    Shared PWM0 arbitration and state                       */
+/* ========================================================================== */
 
-// board RGB LED
+/* RGB LED 状态 */
 static bool rgb_pwm_inited = false;
-static uint32_t rgb_reload;
-static float rgb_last_r;
-static float rgb_last_g;
-static float rgb_last_b;
+static float rgb_last_r = 0.0f;
+static float rgb_last_g = 0.0f;
+static float rgb_last_b = 0.0f;
+
+/* 蜂鸣器状态 */
+static bool buzzer_pwm_inited = false;
+static bool buzzer_enabled = false;
+static uint32_t buzzer_target_hz = 0U;
+
+/* pinsocket 状态（PWM0 ch0~3） */
+static bool pinsocket_pwm_inited = false;
+static bool pinsocket_channel_enabled[4] = {false, false, false, false};
+static float pinsocket_last_duty[4] = {0.0f, 0.0f, 0.0f, 0.0f};
+
+/* PWM0 全局时钟/周期缓存（避免频繁调用 clock_get_frequency） */
+static uint32_t pwm0_src_clk = 0U;
+static uint32_t pwm0_reload = 0U;
+
+/* 获取 PWM0 时钟频率 */
+static void pwm0_init_src_clk(void) {
+  if (pwm0_src_clk == 0U) {
+    pwm0_src_clk = clock_get_frequency(clock_mot0);
+    if (pwm0_src_clk == 0U) {
+      pwm0_src_clk = 1U; /* 防止除零 */
+    }
+  }
+}
+
+/* pinsocket 是否有任意通道正在输出 */
+static bool pinsocket_any_channel_enabled(void) {
+  if (!pinsocket_pwm_inited) {
+    return false;
+  }
+  for (uint8_t ch = 0; ch < 4U; ch++) {
+    if (pinsocket_channel_enabled[ch]) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * @brief 统一设置 PWM0 频率，并根据各外设“最后状态”同步所有通道
+ *
+ * 优先级在上层逻辑决定，这里只负责：
+ *  - 修改 reload（全局频率）
+ *  - 重新写入 pinsocket / RGB / buzzer 的占空比
+ *  - 启动计数器、按状态 enable/disable 对应通道
+ */
+static void pwm0_update_period_and_sync(uint32_t target_hz) {
+  if (target_hz == 0U) {
+    return;
+  }
+
+  pwm0_init_src_clk();
+
+  uint32_t new_reload = pwm0_src_clk / target_hz;
+  if (new_reload == 0U) {
+    new_reload = 1U;
+  }
+  new_reload -= 1U;
+
+  if (new_reload != pwm0_reload) {
+    pwm_stop_counter(HPM_PWM0);
+    pwm_set_reload(HPM_PWM0, 0, new_reload);
+    pwm_set_start_count(HPM_PWM0, 0, 0);
+    pwm0_reload = new_reload;
+  }
+
+  /* pinsocket ch0~3 */
+  if (pinsocket_pwm_inited) {
+    for (uint8_t ch = 0; ch < 4U; ch++) {
+      float duty =
+          pinsocket_channel_enabled[ch] ? pinsocket_last_duty[ch] : 0.0f;
+      pwm_update_duty_edge_aligned(HPM_PWM0, ch, duty);
+    }
+  }
+
+  /* RGB：ch4~6 */
+  if (rgb_pwm_inited) {
+    pwm_update_duty_edge_aligned(HPM_PWM0, 6, rgb_last_r);
+    pwm_update_duty_edge_aligned(HPM_PWM0, 5, rgb_last_g);
+    pwm_update_duty_edge_aligned(HPM_PWM0, 4, rgb_last_b);
+  }
+
+  /* 蜂鸣器：ch7 固定 50% 占空比 */
+  if (buzzer_pwm_inited && buzzer_enabled) {
+    pwm_update_raw_cmp_edge_aligned(HPM_PWM0, 7, pwm0_reload / 2U);
+  }
+
+  pwm_issue_shadow_register_lock_event(HPM_PWM0);
+  pwm_start_counter(HPM_PWM0);
+
+  /* enable/disable 各通道 */
+  if (pinsocket_pwm_inited) {
+    for (uint8_t ch = 0; ch < 4U; ch++) {
+      if (pinsocket_channel_enabled[ch]) {
+        pwm_enable_output(HPM_PWM0, ch);
+      } else {
+        pwm_disable_output(HPM_PWM0, ch);
+      }
+    }
+  }
+
+  if (rgb_pwm_inited) {
+    pwm_enable_output(HPM_PWM0, 4);
+    pwm_enable_output(HPM_PWM0, 5);
+    pwm_enable_output(HPM_PWM0, 6);
+  }
+
+  if (buzzer_pwm_inited) {
+    if (buzzer_enabled) {
+      pwm_enable_output(HPM_PWM0, 7);
+    } else {
+      pwm_disable_output(HPM_PWM0, 7);
+    }
+  }
+}
+
+/* ========================================================================== */
+/*                                RGB LED                                     */
+/* ========================================================================== */
+
 void board_init_rgbled(void) {
   pwm_config_t pwm_cfg;
   pwm_cmp_config_t cmp_cfg = {0};
-  // init pwm pins
+
   init_rgbled_pwm_pins();
-  // Deinitialize PWM0 before configuration
-  pwm_deinit(HPM_PWM0);
-  pwm_stop_counter(HPM_PWM0);
-  //
-  // configure pwm
-  uint32_t freq = clock_get_frequency(clock_mot0);
-  rgb_reload = freq / 10000 - 1U;
-  // configure pwm
+
+  /* 若 PWM0 当前未被 pinsocket/buzzer 使用，则由 RGB 设置一个默认频率；
+     否则仅挂载通道，不改变全局频率 */
+  bool pwm_in_use = pinsocket_pwm_inited || buzzer_pwm_inited;
+
+  if (!pwm_in_use && (pwm0_reload == 0U)) {
+    /* 默认 10 kHz */
+    pwm0_update_period_and_sync(10000U);
+  }
+
   pwm_get_default_pwm_config(HPM_PWM0, &pwm_cfg);
   pwm_cfg.enable_output = true;
   pwm_cfg.invert_output = false;
   pwm_cfg.dead_zone_in_half_cycle = 0;
-  //
-  pwm_stop_counter(HPM_PWM0);
-  pwm_set_reload(HPM_PWM0, 0, rgb_reload);
-  pwm_set_start_count(HPM_PWM0, 0, 0);
-  pwm_issue_shadow_register_lock_event(HPM_PWM0);
-  pwm_start_counter(HPM_PWM0);
-  //
+
   pwm_get_default_cmp_config(HPM_PWM0, &cmp_cfg);
   cmp_cfg.mode = pwm_cmp_mode_output_compare;
-  cmp_cfg.cmp = 0; // init duty 0%
+  cmp_cfg.cmp = 0; /* 初始占空比 0% */
   cmp_cfg.update_trigger = pwm_shadow_register_update_on_modify;
 
+  /* ch4(B), ch5(G), ch6(R) */
   pwm_setup_waveform(HPM_PWM0, 4, &pwm_cfg, 4, &cmp_cfg, 1);
   pwm_setup_waveform(HPM_PWM0, 5, &pwm_cfg, 5, &cmp_cfg, 1);
   pwm_setup_waveform(HPM_PWM0, 6, &pwm_cfg, 6, &cmp_cfg, 1);
-
-  pwm_start_counter(HPM_PWM0);
 
   pwm_enable_output(HPM_PWM0, 4);
   pwm_enable_output(HPM_PWM0, 5);
@@ -440,6 +527,7 @@ void board_init_rgbled(void) {
 
   rgb_pwm_inited = true;
 }
+
 void board_set_rgbled_color(float r, float g, float b) {
   if (!rgb_pwm_inited) {
     board_init_rgbled();
@@ -452,23 +540,19 @@ void board_set_rgbled_color(float r, float g, float b) {
   pwm_update_duty_edge_aligned(HPM_PWM0, 6, r);
   pwm_update_duty_edge_aligned(HPM_PWM0, 5, g);
   pwm_update_duty_edge_aligned(HPM_PWM0, 4, b);
+  pwm_issue_shadow_register_lock_event(HPM_PWM0);
 }
-//
-static bool buzzer_pwm_inited = false;
-static uint32_t buzzer_reload;
+
+/* ========================================================================== */
+/*                                 Buzzer                                     */
+/* ========================================================================== */
+
 void board_init_buzzer(void) {
   pwm_config_t pwm_cfg;
   pwm_cmp_config_t cmp_cfg;
-  // init pwm pins
-  init_buzzer_pwm_pin();
-  //
-  uint32_t src_clk = clock_get_frequency(clock_mot0);
-  /* Default 2 kHz, avoid division by zero */
-  uint32_t target_hz = 2000U;
-  buzzer_reload = (src_clk / target_hz) - 1U;
 
-  /* Stop counting and prevent interference from old configurations */
-  pwm_stop_counter(HPM_PWM0);
+  init_buzzer_pwm_pin();
+
   pwm_get_default_pwm_config(HPM_PWM0, &pwm_cfg);
   pwm_cfg.enable_output = true;
   pwm_cfg.invert_output = false;
@@ -477,83 +561,206 @@ void board_init_buzzer(void) {
   pwm_get_default_cmp_config(HPM_PWM0, &cmp_cfg);
   cmp_cfg.mode = pwm_cmp_mode_output_compare;
   cmp_cfg.update_trigger = pwm_shadow_register_update_on_modify;
-  cmp_cfg.cmp = buzzer_reload / 2; /* 50% duty */
+  cmp_cfg.cmp = 0; /* 初始占空比 0 */
 
-  /* Write reload & initial value */
-  pwm_set_reload(HPM_PWM0, 0, buzzer_reload);
-  pwm_set_start_count(HPM_PWM0, 0, 0);
-
-  /* Configure output channel 7 using CMP7 */
+  /* 使用 CMP7 控制 ch7 */
   pwm_setup_waveform(HPM_PWM0, 7, &pwm_cfg, 7, &cmp_cfg, 1);
-
-  /* Latch shadow -> active */
-  pwm_issue_shadow_register_lock_event(HPM_PWM0);
-
-  pwm_start_counter(HPM_PWM0);
-  pwm_enable_output(HPM_PWM0, 7);
 
   buzzer_pwm_inited = true;
 }
+
 void board_set_buzzer_freq(bool enable, uint32_t freq_in_hz) {
-  if (!enable || (freq_in_hz == 0)) {
-    pwm_disable_output(HPM_PWM0, 7);
-    /*
-     * PB07 shares the PWM0 counter with RGB. When the buzzer is disabled,
-     * restore PWM0 to RGB. Normal configuration to prevent the RGB breathing
-     * from becoming stiff due to frequency changes from the buzzer.
-     */
-    board_init_rgbled();
-    board_set_rgbled_color(rgb_last_r, rgb_last_g, rgb_last_b);
-    buzzer_pwm_inited = false;
+  if (!enable || (freq_in_hz == 0U)) {
+    buzzer_enabled = false;
+    buzzer_target_hz = 0U;
+    if (buzzer_pwm_inited) {
+      pwm_disable_output(HPM_PWM0, 7);
+    }
+    /* 不再强制恢复 RGB/pinsocket 频率，保持当前配置 */
     return;
   }
 
-  /* force configure the channels when enabling the buzzer 7 */
-  board_init_buzzer();
+  if (!buzzer_pwm_inited) {
+    board_init_buzzer();
+  }
 
-  uint32_t src_clk = clock_get_frequency(clock_mot0);
-  buzzer_reload = (src_clk / freq_in_hz) - 1U;
+  buzzer_enabled = true;
+  buzzer_target_hz = freq_in_hz;
 
-  pwm_stop_counter(HPM_PWM0);
-  pwm_set_reload(HPM_PWM0, 0, buzzer_reload);
-  pwm_set_start_count(HPM_PWM0, 0, 0);
+  if (pinsocket_any_channel_enabled()) {
+    /* 有 pinsocket 在工作：pinsocket 优先，禁止修改全局频率。
+       在当前 pwm0_reload 上输出 50% duty。 */
+    if (pwm0_reload == 0U) {
+      /* 理论上不会发生，因为 pinsocket 设置频率必经 pwm0_update_period_and_sync
+       */
+      pwm0_init_src_clk();
+      pwm0_reload = (pwm0_src_clk / freq_in_hz) - 1U;
+    }
 
-  /* 50% duty，new cmp = reload/2 */
-  pwm_update_raw_cmp_edge_aligned(HPM_PWM0, 7, buzzer_reload / 2);
+    pwm_update_raw_cmp_edge_aligned(HPM_PWM0, 7, pwm0_reload / 2U);
+    pwm_issue_shadow_register_lock_event(HPM_PWM0);
+    pwm_enable_output(HPM_PWM0, 7);
 
-  pwm_issue_shadow_register_lock_event(HPM_PWM0);
-  pwm_start_counter(HPM_PWM0);
-  pwm_enable_output(HPM_PWM0, 7);
-  // restore rgb led state
-  board_set_rgbled_color(rgb_last_r, rgb_last_g, rgb_last_b);
+    /* 若 RGB 已经初始化，仅恢复占空比，不触发重新初始化 */
+    if (rgb_pwm_inited) {
+      pwm_update_duty_edge_aligned(HPM_PWM0, 6, rgb_last_r);
+      pwm_update_duty_edge_aligned(HPM_PWM0, 5, rgb_last_g);
+      pwm_update_duty_edge_aligned(HPM_PWM0, 4, rgb_last_b);
+      pwm_issue_shadow_register_lock_event(HPM_PWM0);
+    }
+  } else {
+    /* 无 pinsocket 时，buzzer 可以接管频率 */
+    pwm0_update_period_and_sync(freq_in_hz);
+  }
 }
+
+/* ========================================================================== */
+/*                               IMU Heater                                   */
+/* ========================================================================== */
 
 void board_init_imuheater(void) { init_imuheater_pwm_pin(); }
+
 void board_set_imuheater_power(uint8_t power_percent) {
-  // TODO
+  // TODO: 根据实际硬件设计实现
 }
 
-void board_init_pinsocket_pwmout(void) { init_pinsocket_pwm_pins(); }
-void board_set_pinsocket_pwmout(uint8_t channel, uint32_t freq_in_hz,
-                                float duty_cycle_percent) {
-  // TODO
+/* ========================================================================== */
+/*                             Pinsocket PWM                                  */
+/* ========================================================================== */
+
+void board_init_pinsocket_pwmout(void) {
+  if (pinsocket_pwm_inited) {
+    return;
+  }
+
+  pwm_config_t pwm_cfg;
+  pwm_cmp_config_t cmp_cfg;
+
+  init_pinsocket_pwm_pins();
+
+  pwm_get_default_pwm_config(HPM_PWM0, &pwm_cfg);
+  pwm_cfg.enable_output = true;
+  pwm_cfg.invert_output = false;
+  pwm_cfg.dead_zone_in_half_cycle = 0;
+
+  pwm_get_default_cmp_config(HPM_PWM0, &cmp_cfg);
+  cmp_cfg.mode = pwm_cmp_mode_output_compare;
+  cmp_cfg.update_trigger = pwm_shadow_register_update_on_modify;
+  cmp_cfg.cmp = 0;
+
+  for (uint8_t ch = 0; ch < 4U; ch++) {
+    pwm_setup_waveform(HPM_PWM0, ch, &pwm_cfg, ch, &cmp_cfg, 1);
+    pinsocket_channel_enabled[ch] = false;
+    pinsocket_last_duty[ch] = 0.0f;
+    pwm_disable_output(HPM_PWM0, ch);
+  }
+
+  pinsocket_pwm_inited = true;
 }
+
+/**
+ * @brief pinsocket PWM 输出控制
+ *
+ * 优先级：pinsocket > buzzer > RGB
+ *  - 任一 pinsocket 通道 enable 时，由 pinsocket 接管 PWM0 频率；
+ *  - 所有 pinsocket 通道 disable 后，若 buzzer 仍 enable，则交还给 buzzer；
+ *  - 再无 buzzer 时，仅 RGB 使用时才由 RGB 设默认频率。
+ */
+void board_set_pinsocket_pwmout(bool enable, uint8_t channel,
+                                uint32_t freq_in_hz, float duty_cycle_percent) {
+  if (channel >= 4U) {
+    return;
+  }
+
+  if (!pinsocket_pwm_inited) {
+    board_init_pinsocket_pwmout();
+  }
+
+  if (!enable || (freq_in_hz == 0U) || (duty_cycle_percent <= 0.0f)) {
+    /* 关闭指定通道 */
+    pwm_disable_output(HPM_PWM0, channel);
+    pinsocket_channel_enabled[channel] = false;
+    pinsocket_last_duty[channel] = 0.0f;
+
+    if (!pinsocket_any_channel_enabled()) {
+      /* 所有 pinsocket 通道都关闭了 */
+      if (buzzer_enabled && (buzzer_target_hz > 0U)) {
+        /* 若蜂鸣器仍启用，则恢复其目标频率 */
+        pwm0_update_period_and_sync(buzzer_target_hz);
+      } else {
+        /* 否则保持当前频率（RGB 对频率不敏感） */
+      }
+    }
+    return;
+  }
+
+  /* enable = true, 且具备有效频率和占空比 */
+
+  float duty = duty_cycle_percent;
+  if (duty > 100.0f) {
+    duty = 100.0f;
+  }
+
+  pinsocket_channel_enabled[channel] = true;
+  pinsocket_last_duty[channel] = duty;
+
+  /* 判断是否已有其他 pinsocket 通道在工作 */
+  bool other_active = false;
+  for (uint8_t ch = 0; ch < 4U; ch++) {
+    if ((ch != channel) && pinsocket_channel_enabled[ch]) {
+      other_active = true;
+      break;
+    }
+  }
+
+  if (!other_active) {
+    /* 当前是“第一个/唯一”启用的 pinsocket 通道：由 pinsocket 接管 PWM0 频率 */
+    pwm0_update_period_and_sync(freq_in_hz);
+  } else {
+    /* 已有其它 pinsocket 通道在输出：禁止修改频率，仅设置本通道占空比 */
+    pwm_update_duty_edge_aligned(HPM_PWM0, channel, duty);
+    pwm_issue_shadow_register_lock_event(HPM_PWM0);
+  }
+
+  /* 再统一 enable/disable 各 pinsocket 通道 */
+  for (uint8_t ch = 0; ch < 4U; ch++) {
+    if (pinsocket_channel_enabled[ch]) {
+      pwm_enable_output(HPM_PWM0, ch);
+    } else {
+      pwm_disable_output(HPM_PWM0, ch);
+    }
+  }
+
+  /* 若蜂鸣器启用，则在当前频率上维持 50% 占空比 */
+  if (buzzer_enabled && buzzer_pwm_inited) {
+    pwm_update_raw_cmp_edge_aligned(HPM_PWM0, 7, pwm0_reload / 2U);
+    pwm_enable_output(HPM_PWM0, 7);
+    pwm_issue_shadow_register_lock_event(HPM_PWM0);
+  }
+}
+
+/* ========================================================================== */
+/*                          User key / switch / delay                         */
+/* ========================================================================== */
 
 void board_init_user_key(void) { init_user_key_pin(); }
+
 bool board_get_user_key_status(void) {
   return gpio_read_pin(HPM_GPIO0, GPIO_DI_GPIOY, 3) == 0;
 }
 
 void board_init_user_sw(void) { init_user_sw_pin(); }
+
 bool board_get_user_sw_status(void) {
   return gpio_read_pin(HPM_GPIO0, GPIO_DI_GPIOY, 4) != 0;
 }
 
-// board delay functions
+/* board delay functions */
 void board_delay_us(uint32_t us) { clock_cpu_delay_us(us); }
 
 void board_delay_ms(uint32_t ms) { clock_cpu_delay_ms(ms); }
-// TODO Remove - hpm5300evk config，if not use hpm5300evk
+
+/* TODO Remove - hpm5300evk config，if not use hpm5300evk */
 void board_init_gpio_pins(void) {
   init_gpio_pins();
   gpio_set_pin_input(BOARD_APP_GPIO_CTRL, BOARD_APP_GPIO_INDEX,
