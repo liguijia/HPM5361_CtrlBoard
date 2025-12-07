@@ -15,8 +15,11 @@ int main(void) {
   board_init_rgbled();
   board_init_buzzer();
   board_init_pinsocket_pwmout();
+  board_init_imuheater();
   board_set_rgbled_color(50.0, 25.0, 75.0);
+
   while (1) {
+    board_set_imuheater_power(75.0f);
     board_set_buzzer_freq(false, frq);
     board_set_pinsocket_pwmout(true, 1, 1000, 50);
     // board_set_pinsocket_pwmout(true, 2, 1000, 50);

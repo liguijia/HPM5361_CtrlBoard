@@ -136,7 +136,7 @@ void board_print_clock_freq(void) {
 }
 
 void board_init(void) {
-  init_py_pins_as_pgpio();
+  init_py_pins_as_gpio();
   //
   board_init_clock();
   //
@@ -618,10 +618,64 @@ void board_set_buzzer_freq(bool enable, uint32_t freq_in_hz) {
 /*                               IMU Heater                                   */
 /* ========================================================================== */
 
-void board_init_imuheater(void) { init_imuheater_pwm_pin(); }
+static bool imuheater_pwm_inited;
+static uint32_t imuheater_reload;
 
-void board_set_imuheater_power(uint8_t power_percent) {
-  // TODO: 根据实际硬件设计实现
+void board_init_imuheater(void) {
+  if (imuheater_pwm_inited) {
+    return;
+  }
+
+  pwm_config_t pwm_cfg;
+  pwm_cmp_config_t cmp_cfg;
+
+  init_imuheater_pwm_pin(); /* PY01 -> PWM1 CH5 */
+
+  uint32_t src_clk = clock_get_frequency(clock_mot0);
+  /* 固定 10 kHz，避免可闻噪声；如需调整可修改 target_hz */
+  uint32_t target_hz = 10000U;
+  imuheater_reload = (src_clk / target_hz) - 1U;
+
+  pwm_stop_counter(HPM_PWM1);
+  pwm_get_default_pwm_config(HPM_PWM1, &pwm_cfg);
+  pwm_cfg.enable_output = true;
+  pwm_cfg.invert_output = false;
+  pwm_cfg.dead_zone_in_half_cycle = 0;
+
+  pwm_get_default_cmp_config(HPM_PWM1, &cmp_cfg);
+  cmp_cfg.mode = pwm_cmp_mode_output_compare;
+  cmp_cfg.update_trigger = pwm_shadow_register_update_on_modify;
+  cmp_cfg.cmp = 0; /* 初始 0% 占空比 */
+
+  pwm_set_reload(HPM_PWM1, 0, imuheater_reload);
+  pwm_set_start_count(HPM_PWM1, 0, 0);
+  pwm_setup_waveform(HPM_PWM1, 5, &pwm_cfg, 5, &cmp_cfg, 1);
+
+  pwm_issue_shadow_register_lock_event(HPM_PWM1);
+  pwm_start_counter(HPM_PWM1);
+  pwm_enable_output(HPM_PWM1, 5);
+
+  imuheater_pwm_inited = true;
+}
+
+void board_set_imuheater_power(float power_percent) {
+  if (!imuheater_pwm_inited) {
+    board_init_imuheater();
+  }
+
+  if (power_percent <= 0.0f) {
+    pwm_disable_output(HPM_PWM1, 5);
+    return;
+  }
+
+  float duty = power_percent;
+  if (duty > 100.0f) {
+    duty = 100.0f;
+  }
+
+  pwm_update_duty_edge_aligned(HPM_PWM1, 5, duty);
+  pwm_issue_shadow_register_lock_event(HPM_PWM1);
+  pwm_enable_output(HPM_PWM1, 5);
 }
 
 /* ========================================================================== */

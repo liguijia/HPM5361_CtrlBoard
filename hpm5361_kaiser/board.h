@@ -79,7 +79,7 @@ void board_init_buzzer(void);
 void board_set_buzzer_freq(bool enable, uint32_t freq_in_hz);
 
 void board_init_imuheater(void);
-void board_set_imuheater_power(uint8_t power_percent);
+void board_set_imuheater_power(float power_percent);
 
 void board_init_pinsocket_pwmout(void);
 void board_set_pinsocket_pwmout(bool enable, uint8_t channel,
