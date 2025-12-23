@@ -136,7 +136,7 @@ void board_print_clock_freq(void) {
 }
 
 void board_init(void) {
-  init_py_pins_as_gpio();
+  init_py_pins_as_soc_gpio();
   //
   board_init_clock();
   //
@@ -180,7 +180,7 @@ void board_init_clock(void) {
   pcfg_dcdc_set_voltage(HPM_PCFG, 1275);
 
   /* Configure CPU to 720MHz, AXI/AHB to 360MHz */
-  sysctl_config_cpu0_domain_clock(HPM_SYSCTL, clock_source_pll0_clk0, 1, 2);
+  sysctl_config_cpu0_domain_clock(HPM_SYSCTL, clock_source_pll0_clk0, 2, 3);
   /* Configure PLL0 Post Divider */
   pllctlv2_set_postdiv(HPM_PLLCTLV2, pllctlv2_pll0, pllctlv2_clk0,
                        pllctlv2_div_1p0); /* PLL0CLK0: 960MHz */
@@ -189,7 +189,7 @@ void board_init_clock(void) {
   pllctlv2_set_postdiv(HPM_PLLCTLV2, pllctlv2_pll0, pllctlv2_clk2,
                        pllctlv2_div_2p4); /* PLL0CLK2: 400MHz */
   /* Configure PLL0 Frequency to 720MHz */
-  pllctlv2_init_pll_with_freq(HPM_PLLCTLV2, pllctlv2_pll0, 720000000);
+  pllctlv2_init_pll_with_freq(HPM_PLLCTLV2, pllctlv2_pll0, 960000000);
 
   clock_update_core_clock();
 

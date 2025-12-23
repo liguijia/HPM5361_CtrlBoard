@@ -9,7 +9,7 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE "Debug" CACHE STRING "Build type" FORCE)
 endif()
 set(BOARD "hpm5361_kaiser" CACHE STRING "Target board")
-set(HPM_BUILD_TYPE "ram_xip" CACHE STRING "HPM build type")
+set(HPM_BUILD_TYPE "flash_xip" CACHE STRING "HPM build type")
 # Set RISC-V toolchain options
 set(RV_ARCH "rv32imafdc" CACHE STRING "RISC-V arch")
 set(RV_ABI "ilp32d" CACHE STRING "RISC-V ABI")
